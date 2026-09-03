@@ -31,6 +31,9 @@ const productSchema = new mongoose.Schema(
     hsnCode: { type: String, trim: true, default: '' },
     taxPercent: { type: Number, default: 0, min: 0, max: 100 },
     imageUrl: { type: String, trim: true, default: '' },
+    // Set when the image was uploaded through Cloudinary, so it can be
+    // deleted when the image is replaced or the product is removed.
+    imagePublicId: { type: String, trim: true, default: '' },
     isActive: { type: Boolean, default: true, index: true },
     createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   },

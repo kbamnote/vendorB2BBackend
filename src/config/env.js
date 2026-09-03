@@ -38,6 +38,17 @@ module.exports = {
     max: toInt(process.env.RATE_LIMIT_MAX, 300),
     authMax: toInt(process.env.AUTH_RATE_LIMIT_MAX, 20),
   },
+  cloudinary: {
+    cloudName: process.env.CLOUDINARY_CLOUD_NAME || '',
+    apiKey: process.env.CLOUDINARY_API_KEY || '',
+    apiSecret: process.env.CLOUDINARY_API_SECRET || '',
+    folder: process.env.CLOUDINARY_UPLOAD_FOLDER || 'vendor-b2b-portal/products',
+    // Uploads are optional: without credentials the product form falls back
+    // to a plain image URL field instead of breaking.
+    get isConfigured() {
+      return Boolean(this.cloudName && this.apiKey && this.apiSecret);
+    },
+  },
   seed: {
     name: process.env.SEED_SUPERADMIN_NAME || 'Super Admin',
     email: process.env.SEED_SUPERADMIN_EMAIL || 'superadmin@portal.com',

@@ -13,6 +13,7 @@ router.use('/vendors', require('./vendor.routes'));
 router.use('/products', require('./product.routes'));
 router.use('/users', require('./user.routes'));
 router.use('/my', require('./my.routes'));
+router.use('/uploads', require('./upload.routes'));
 router.use('/dashboard', require('./dashboard.routes'));
 
 module.exports = router;

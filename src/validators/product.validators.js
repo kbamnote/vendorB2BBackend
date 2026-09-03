@@ -21,6 +21,7 @@ const optionalDetailRules = () => [
   body('hsnCode').optional({ values: 'falsy' }).isString().trim().isLength({ max: 20 }),
   body('taxPercent').optional({ values: 'falsy' }).isFloat({ min: 0, max: 100 }),
   body('imageUrl').optional({ values: 'falsy' }).isString().trim().isLength({ max: 500 }),
+  body('imagePublicId').optional({ values: 'falsy' }).isString().trim().isLength({ max: 300 }),
 ];
 
 const createProductRules = [

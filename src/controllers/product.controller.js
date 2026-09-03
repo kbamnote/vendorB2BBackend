@@ -6,6 +6,7 @@ const ApiError = require('../utils/ApiError');
 const asyncHandler = require('../utils/asyncHandler');
 const { ok, created, paginated } = require('../utils/response');
 const { getPagination, buildSearchFilter } = require('../utils/pagination');
+const { safeDestroyImage } = require('../utils/images');
 
 // GET /products  (super admin - the full catalogue)
 const listProducts = asyncHandler(async (req, res) => {
@@ -74,6 +75,7 @@ const createProduct = asyncHandler(async (req, res) => {
     hsnCode: req.body.hsnCode,
     taxPercent: req.body.taxPercent,
     imageUrl: req.body.imageUrl,
+    imagePublicId: req.body.imagePublicId,
     isActive: req.body.isActive !== undefined ? req.body.isActive : true,
     createdBy: req.user._id,
   });
@@ -94,6 +96,7 @@ const updateProduct = asyncHandler(async (req, res) => {
     'hsnCode',
     'taxPercent',
     'imageUrl',
+    'imagePublicId',
   ];
   const updates = {};
   fields.forEach((f) => {
@@ -106,11 +109,18 @@ const updateProduct = asyncHandler(async (req, res) => {
     if (clash) throw ApiError.conflict('A product with this SKU already exists');
   }
 
+  const previous = await Product.findById(req.params.id).select('imagePublicId').lean();
+
   const product = await Product.findByIdAndUpdate(req.params.id, updates, {
     new: true,
     runValidators: true,
   });
   if (!product) throw ApiError.notFound('Product not found');
+
+  // The image was swapped or cleared - remove the file it replaced.
+  if (previous?.imagePublicId && previous.imagePublicId !== product.imagePublicId) {
+    await safeDestroyImage(previous.imagePublicId);
+  }
 
   return ok(res, { product }, 'Product updated successfully');
 });
@@ -135,6 +145,7 @@ const deleteProduct = asyncHandler(async (req, res) => {
 
   await VendorProduct.deleteMany({ product: product._id });
   await Product.deleteOne({ _id: product._id });
+  await safeDestroyImage(product.imagePublicId);
 
   return ok(res, null, 'Product deleted and removed from all vendors');
 });
