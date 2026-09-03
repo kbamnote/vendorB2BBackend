@@ -4,6 +4,8 @@ const Vendor = require('../models/Vendor');
 const Product = require('../models/Product');
 const User = require('../models/User');
 const VendorProduct = require('../models/VendorProduct');
+const PurchaseRequest = require('../models/PurchaseRequest');
+const { REQUEST_STATUS } = require('../models/PurchaseRequest');
 const asyncHandler = require('../utils/asyncHandler');
 const { ok } = require('../utils/response');
 const { ROLES } = require('../config/roles');
@@ -22,6 +24,8 @@ const summary = asyncHandler(async (req, res) => {
       recentVendors,
       recentProducts,
       topVendors,
+      awaitingQuotation,
+      totalRequests,
     ] = await Promise.all([
       Vendor.countDocuments(),
       Vendor.countDocuments({ isActive: true }),
@@ -43,6 +47,8 @@ const summary = asyncHandler(async (req, res) => {
         { $unwind: '$vendor' },
         { $project: { _id: 0, count: 1, name: '$vendor.name', code: '$vendor.code' } },
       ]),
+      PurchaseRequest.countDocuments({ status: REQUEST_STATUS.SUBMITTED }),
+      PurchaseRequest.countDocuments(),
     ]);
 
     return ok(
@@ -59,6 +65,8 @@ const summary = asyncHandler(async (req, res) => {
           vendorAdmins,
           vendorStaff,
           totalAssignments,
+          awaitingQuotation,
+          totalRequests,
         },
         recentVendors,
         recentProducts,
@@ -71,8 +79,15 @@ const summary = asyncHandler(async (req, res) => {
   // Vendor admin / vendor staff - everything is scoped to their own vendor.
   const vendorId = req.user.vendor;
 
-  const [assignedProducts, activeAssigned, staffCount, adminCount, recentAssignments] =
-    await Promise.all([
+  const [
+    assignedProducts,
+    activeAssigned,
+    staffCount,
+    adminCount,
+    recentAssignments,
+    openRequests,
+    awaitingDecision,
+  ] = await Promise.all([
       VendorProduct.countDocuments({ vendor: vendorId }),
       VendorProduct.countDocuments({ vendor: vendorId, isActive: true }),
       User.countDocuments({ vendor: vendorId, role: ROLES.VENDOR_STAFF }),
@@ -82,6 +97,11 @@ const summary = asyncHandler(async (req, res) => {
         .sort({ assignedAt: -1 })
         .limit(6)
         .lean(),
+      PurchaseRequest.countDocuments({
+        vendor: vendorId,
+        status: { $in: [REQUEST_STATUS.SUBMITTED, REQUEST_STATUS.QUOTED] },
+      }),
+      PurchaseRequest.countDocuments({ vendor: vendorId, status: REQUEST_STATUS.QUOTED }),
     ]);
 
   const categories = await VendorProduct.aggregate([
@@ -107,6 +127,8 @@ const summary = asyncHandler(async (req, res) => {
         inactiveAssigned: assignedProducts - activeAssigned,
         staffCount,
         adminCount,
+        openRequests,
+        awaitingDecision,
       },
       categories,
       recentAssignments: recentAssignments
