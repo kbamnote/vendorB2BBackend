@@ -82,7 +82,18 @@ const getVendor = asyncHandler(async (req, res) => {
   );
 });
 
-// POST /vendors
+/** Standalone mongod has no transaction support - detect that and fall back. */
+const isTransactionUnsupported = (err) =>
+  Boolean(err && /Transaction|replica set|Unsupported/i.test(err.message || ''));
+
+/**
+ * POST /vendors
+ *
+ * Creates the organisation and its first vendor admin login in one step, so a
+ * vendor is never left without a way in. Both rows are written inside a
+ * transaction (with a compensating delete on standalone mongod), which means a
+ * duplicate admin email can never leave an orphaned vendor behind.
+ */
 const createVendor = asyncHandler(async (req, res) => {
   const payload = {
     name: req.body.name,
@@ -100,8 +111,56 @@ const createVendor = asyncHandler(async (req, res) => {
   const existing = await Vendor.findOne({ code: String(payload.code).toUpperCase() }).lean();
   if (existing) throw ApiError.conflict('A vendor with this code already exists');
 
-  const vendor = await Vendor.create(payload);
-  return created(res, { vendor }, 'Vendor created successfully');
+  const input = req.body.admin || {};
+  const adminEmail = String(input.email || '').toLowerCase().trim();
+
+  // Check the login collision before writing anything, so the common mistake
+  // gives a clean 409 rather than a rolled-back transaction.
+  const emailTaken = await User.findOne({ email: adminEmail }).lean();
+  if (emailTaken) throw ApiError.conflict('An account with this email already exists');
+
+  const buildAdmin = (vendorId) => ({
+    name: input.name,
+    email: adminEmail,
+    password: input.password,
+    phone: input.phone,
+    designation: input.designation,
+    role: ROLES.VENDOR_ADMIN,
+    vendor: vendorId,
+    createdBy: req.user._id,
+  });
+
+  let vendor;
+  let admin;
+
+  const session = await mongoose.startSession();
+  try {
+    await session.withTransaction(async () => {
+      const [createdVendor] = await Vendor.create([payload], { session });
+      // Model.create runs the save hooks, so the password is still hashed here.
+      const [createdAdmin] = await User.create([buildAdmin(createdVendor._id)], { session });
+      vendor = createdVendor;
+      admin = createdAdmin;
+    });
+  } catch (err) {
+    if (!isTransactionUnsupported(err)) throw err;
+
+    vendor = await Vendor.create(payload);
+    try {
+      admin = await User.create(buildAdmin(vendor._id));
+    } catch (adminErr) {
+      await Vendor.deleteOne({ _id: vendor._id });
+      throw adminErr;
+    }
+  } finally {
+    await session.endSession();
+  }
+
+  return created(
+    res,
+    { vendor, admin: admin.toSafeJSON() },
+    `${vendor.name} created with an admin login for ${admin.email}`
+  );
 });
 
 // PUT /vendors/:id
@@ -171,14 +230,10 @@ const deleteVendor = asyncHandler(async (req, res) => {
       await Vendor.deleteOne({ _id: vendor._id }).session(session);
     });
   } catch (err) {
-    // Standalone mongod has no transaction support - fall back to sequential deletes.
-    if (err && /Transaction|replica set|Unsupported/i.test(err.message || '')) {
-      await User.deleteMany({ vendor: vendor._id });
-      await VendorProduct.deleteMany({ vendor: vendor._id });
-      await Vendor.deleteOne({ _id: vendor._id });
-    } else {
-      throw err;
-    }
+    if (!isTransactionUnsupported(err)) throw err;
+    await User.deleteMany({ vendor: vendor._id });
+    await VendorProduct.deleteMany({ vendor: vendor._id });
+    await Vendor.deleteOne({ _id: vendor._id });
   } finally {
     await session.endSession();
   }

@@ -1,6 +1,7 @@
 'use strict';
 
 const { body } = require('express-validator');
+const { strongPassword } = require('./auth.validators');
 
 // Each rule set builds its own chains: express-validator chains are mutable,
 // so reusing one array and calling .optional() on it would also mutate the other.
@@ -28,10 +29,31 @@ const optionalDetailRules = () => [
   body('address.pincode').optional({ values: 'falsy' }).isString().trim().isLength({ max: 12 }),
 ];
 
+// The first vendor admin login is created together with the vendor, so a new
+// organisation always has a way in.
+const adminRules = () => [
+  body('admin')
+    .isObject()
+    .withMessage('Admin login details are required for a new vendor'),
+  body('admin.name')
+    .isString()
+    .trim()
+    .isLength({ min: 2, max: 100 })
+    .withMessage('Admin name is required'),
+  body('admin.email')
+    .isEmail()
+    .withMessage('A valid admin login email is required')
+    .normalizeEmail(),
+  strongPassword('admin.password'),
+  body('admin.phone').optional({ values: 'falsy' }).isString().trim().isLength({ max: 20 }),
+  body('admin.designation').optional({ values: 'falsy' }).isString().trim().isLength({ max: 80 }),
+];
+
 const createVendorRules = [
   nameRule().withMessage('Vendor name is required'),
   codeRule(),
   ...optionalDetailRules(),
+  ...adminRules(),
 ];
 
 const updateVendorRules = [
