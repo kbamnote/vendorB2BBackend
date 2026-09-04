@@ -276,9 +276,15 @@ async function run() {
       'source.externalId': fields.source.externalId,
     });
 
-    // Only fetch images the first time, so re-runs stay cheap.
+    // Fetch images on the first import, and again if they were stored as bare
+    // source URLs before Cloudinary was configured - otherwise enabling
+    // Cloudinary later would never re-host them, and they would stay pointed at
+    // a host whose certificate browsers reject.
     let images = existing ? existing.images : [];
-    if (!SKIP_IMAGES && (!existing || !existing.images.length)) {
+    const missingRehost =
+      config.cloudinary.isConfigured && images.some((image) => !image.publicId);
+
+    if (!SKIP_IMAGES && (!existing || !existing.images.length || missingRehost)) {
       images = [];
       for (const img of _sourceImages) {
         images.push(await rehostImage(img.src, img.alt));

@@ -18,6 +18,49 @@ const toInt = (value, fallback) => {
   return Number.isNaN(parsed) ? fallback : parsed;
 };
 
+/**
+ * Checks the database name inside MONGO_URI.
+ *
+ * Two mistakes here are expensive and both fail far away from their cause: a
+ * missing name silently lands every collection in `test`, which another
+ * application on the same cluster may already own, and a stray slash produces
+ * an unusable name that only errors on the first query.
+ */
+function checkMongoUri(uri) {
+  // Everything between the host section and the query string is the db name.
+  // Drop the scheme first, then the credentials if present - a local URI has
+  // no "@" at all, and a password may legitimately contain one.
+  const withoutScheme = String(uri).replace(/^mongodb(\+srv)?:\/\//i, '');
+  const at = withoutScheme.lastIndexOf('@');
+  const afterHost = at === -1 ? withoutScheme : withoutScheme.slice(at + 1);
+
+  const slash = afterHost.indexOf('/');
+  const dbName = slash === -1 ? '' : afterHost.slice(slash + 1).split('?')[0];
+
+  if (!dbName) {
+    // eslint-disable-next-line no-console
+    console.warn(
+      '[config] MONGO_URI has no database name, so MongoDB will use "test". ' +
+        'Add one before the "?" (e.g. .../vendor_b2b_portal?retryWrites=true) ' +
+        'so this app does not share a database with another project.'
+    );
+    return;
+  }
+
+  const invalid = /[/\\. "$*<>:|?]/.exec(dbName);
+  if (invalid) {
+    // eslint-disable-next-line no-console
+    console.error(
+      `[config] MONGO_URI contains an invalid database name "${dbName}" ` +
+        `(the character ${JSON.stringify(invalid[0])} is not allowed). ` +
+        'A trailing slash is the usual cause: use ".../vendor_b2b_portal?..." not ".../vendor_b2b_portal/?...".'
+    );
+    process.exit(1);
+  }
+}
+
+checkMongoUri(process.env.MONGO_URI);
+
 module.exports = {
   env: process.env.NODE_ENV || 'development',
   isProduction: (process.env.NODE_ENV || 'development') === 'production',
