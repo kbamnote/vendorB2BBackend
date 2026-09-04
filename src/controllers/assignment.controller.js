@@ -80,6 +80,88 @@ const listVendorProducts = asyncHandler(async (req, res) => {
 });
 
 /**
+ * GET /my/products/:productId
+ *
+ * One product, but only if it is actually assigned to the caller's vendor -
+ * an unassigned id returns 404 rather than leaking that it exists.
+ */
+const getVendorProduct = asyncHandler(async (req, res) => {
+  const vendor = await resolveVendor(req);
+
+  const row = await VendorProduct.findOne({
+    vendor: vendor._id,
+    product: req.params.productId,
+    isActive: true,
+  })
+    .populate('product')
+    .lean();
+
+  if (!row || !row.product) throw ApiError.notFound('This product is not available to you');
+
+  const related = await VendorProduct.find({
+    vendor: vendor._id,
+    isActive: true,
+    product: { $ne: row.product._id },
+  })
+    .populate({ path: 'product', match: { category: row.product.category, isActive: true } })
+    .limit(8)
+    .lean();
+
+  return ok(
+    res,
+    {
+      item: {
+        assignmentId: row._id,
+        vendorPrice: row.vendorPrice,
+        effectivePrice:
+          row.vendorPrice !== null && row.vendorPrice !== undefined
+            ? row.vendorPrice
+            : row.product.basePrice,
+        minOrderQty: row.minOrderQty,
+        isActive: row.isActive,
+        assignedAt: row.assignedAt,
+        product: row.product,
+      },
+      related: related
+        .filter((entry) => entry.product)
+        .slice(0, 4)
+        .map((entry) => ({
+          assignmentId: entry._id,
+          effectivePrice:
+            entry.vendorPrice !== null && entry.vendorPrice !== undefined
+              ? entry.vendorPrice
+              : entry.product.basePrice,
+          minOrderQty: entry.minOrderQty,
+          product: entry.product,
+        })),
+    },
+    'Product loaded'
+  );
+});
+
+/**
+ * GET /my/categories - the categories present in the vendor's own catalogue,
+ * with a count, for the storefront filter rail.
+ */
+const listVendorCategories = asyncHandler(async (req, res) => {
+  const vendor = await resolveVendor(req);
+
+  const rows = await VendorProduct.aggregate([
+    { $match: { vendor: vendor._id, isActive: true } },
+    { $lookup: { from: 'products', localField: 'product', foreignField: '_id', as: 'product' } },
+    { $unwind: '$product' },
+    { $match: { 'product.isActive': true } },
+    { $group: { _id: '$product.category', count: { $sum: 1 } } },
+    { $sort: { count: -1, _id: 1 } },
+    { $project: { _id: 0, category: '$_id', count: 1 } },
+  ]);
+
+  const total = rows.reduce((sum, row) => sum + row.count, 0);
+
+  return ok(res, { categories: rows, total }, 'Categories loaded');
+});
+
+/**
  * GET /vendors/:vendorId/assignable-products  (super admin)
  * Catalogue products that are NOT yet assigned to this vendor.
  */
@@ -204,6 +286,8 @@ const updateAssignment = asyncHandler(async (req, res) => {
 
 module.exports = {
   listVendorProducts,
+  getVendorProduct,
+  listVendorCategories,
   listAssignableProducts,
   assignProducts,
   unassignProducts,

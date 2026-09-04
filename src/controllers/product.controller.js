@@ -76,6 +76,9 @@ const createProduct = asyncHandler(async (req, res) => {
     taxPercent: req.body.taxPercent,
     imageUrl: req.body.imageUrl,
     imagePublicId: req.body.imagePublicId,
+    shortDescription: req.body.shortDescription,
+    images: req.body.images,
+    attributes: req.body.attributes,
     isActive: req.body.isActive !== undefined ? req.body.isActive : true,
     createdBy: req.user._id,
   });
@@ -97,6 +100,9 @@ const updateProduct = asyncHandler(async (req, res) => {
     'taxPercent',
     'imageUrl',
     'imagePublicId',
+    'shortDescription',
+    'images',
+    'attributes',
   ];
   const updates = {};
   fields.forEach((f) => {

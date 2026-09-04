@@ -22,6 +22,9 @@ const optionalDetailRules = () => [
   body('taxPercent').optional({ values: 'falsy' }).isFloat({ min: 0, max: 100 }),
   body('imageUrl').optional({ values: 'falsy' }).isString().trim().isLength({ max: 500 }),
   body('imagePublicId').optional({ values: 'falsy' }).isString().trim().isLength({ max: 300 }),
+  body('shortDescription').optional({ values: 'falsy' }).isString().trim().isLength({ max: 600 }),
+  body('images').optional().isArray({ max: 12 }).withMessage('At most 12 images'),
+  body('attributes').optional().isArray({ max: 10 }).withMessage('At most 10 attributes'),
 ];
 
 const createProductRules = [

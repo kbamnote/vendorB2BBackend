@@ -6,7 +6,7 @@ const { protect } = require('../middleware/auth');
 const { authorize, scopeToVendor } = require('../middleware/authorize');
 const { ROLES } = require('../config/roles');
 const assignmentCtrl = require('../controllers/assignment.controller');
-const { paginationQuery } = require('../validators/common.validators');
+const { mongoIdParam, paginationQuery } = require('../validators/common.validators');
 
 const router = express.Router();
 
@@ -16,5 +16,11 @@ const router = express.Router();
 router.use(protect, authorize(ROLES.VENDOR_ADMIN, ROLES.VENDOR_STAFF), scopeToVendor);
 
 router.get('/products', validate(paginationQuery), assignmentCtrl.listVendorProducts);
+router.get('/categories', assignmentCtrl.listVendorCategories);
+router.get(
+  '/products/:productId',
+  validate([mongoIdParam('productId')]),
+  assignmentCtrl.getVendorProduct
+);
 
 module.exports = router;
