@@ -4,19 +4,23 @@
  * Account doctor - reports on portal logins and repairs the two states that
  * lock somebody out of their own portal.
  *
- *   npm run doctor                        list every account and flag problems
- *   npm run doctor -- --email=a@b.com     inspect one account in detail
- *   npm run doctor -- --promote=a@b.com   make that account the super admin
+ *   npm run doctor                                  list accounts and flag problems
+ *   node src/seed/doctor.js --email=a@b.com         inspect one account
+ *   node src/seed/doctor.js --promote=a@b.com       make that account the super admin
+ *
+ * Call node directly for the flags: npm swallows `--key=value` arguments as its
+ * own config even after `--`, so they never reach the script.
  *
  * Why promote exists: a user with a vendor role whose vendor row has been
  * deleted can never sign in again - login refuses them and there is no screen
  * to fix it from, because reaching any screen requires signing in.
  */
 
+const mongoose = require('mongoose');
 const { connectDB, disconnectDB } = require('../config/db');
 const User = require('../models/User');
 const Vendor = require('../models/Vendor');
-const { ROLES } = require('../config/roles');
+const { ROLES, ROLE_VALUES } = require('../config/roles');
 
 const argv = process.argv.slice(2);
 const valueOf = (flag) => {
@@ -39,6 +43,10 @@ async function describe(user) {
   if (user.vendor) vendor = await Vendor.findById(user.vendor).lean();
 
   const problems = [];
+  if (!ROLE_VALUES.includes(user.role)) {
+    problems.push(`role "${user.role}" is not a role of this portal`);
+  }
+  if (!user.email) problems.push('no email');
   if (!user.isActive) problems.push('account deactivated');
   if (needsVendor && !user.vendor) problems.push('vendor role with no vendor linked');
   if (needsVendor && user.vendor && !vendor) problems.push('linked vendor no longer exists');
@@ -78,7 +86,10 @@ async function run() {
   }
 
   const superAdmins = users.filter((u) => u.role === ROLES.SUPER_ADMIN);
+  const foreign = users.filter((u) => !ROLE_VALUES.includes(u.role));
 
+  log('');
+  log(`Connected to database: ${mongoose.connection.name}`);
   log('');
   log(`${users.length} account(s)`);
   log('-'.repeat(96));
@@ -90,13 +101,13 @@ async function run() {
     const info = await describe(user);
     const vendorLabel = user.vendor
       ? info.vendor
-        ? `${info.vendor.name.slice(0, 18)}`
+        ? String(info.vendor.name || info.vendor._id).slice(0, 18)
         : 'MISSING'
       : '-';
 
     log(
-      `${user.email.slice(0, 33).padEnd(34)}` +
-        `${user.role.padEnd(15)}` +
+      `${String(user.email || '(no email)').slice(0, 33).padEnd(34)}` +
+        `${String(user.role || '(none)').padEnd(15)}` +
         `${(user.isActive ? 'yes' : 'NO').padEnd(9)}` +
         `${vendorLabel.padEnd(22)}` +
         `${info.canSignIn ? 'can sign in' : info.problems.join('; ')}`
@@ -105,6 +116,15 @@ async function run() {
 
   log('-'.repeat(96));
   log('');
+
+  if (foreign.length) {
+    log('');
+    log(`!! ${foreign.length} of ${users.length} accounts use roles this portal does not define:`);
+    log(`   ${[...new Set(foreign.map((u) => u.role))].join(', ')}`);
+    log('   That means MONGO_URI points at a database another application already owns.');
+    log('   Point it at a dedicated database (add /vendor_b2b_portal before the "?" in the');
+    log('   connection string) and run "npm run seed" again.');
+  }
 
   if (!superAdmins.length) {
     log('!! There is no super_admin account at all.');
