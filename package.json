@@ -10,7 +10,8 @@
     "dev": "nodemon src/server.js",
     "seed": "node src/seed/seed.js",
     "seed:demo": "node src/seed/seed.js --demo",
-    "import:printworld": "node src/seed/importPrintworld.js"
+    "import:printworld": "node src/seed/importPrintworld.js",
+    "seed:reset-password": "node src/seed/seed.js --reset-password"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

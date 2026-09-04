@@ -18,6 +18,7 @@ const VendorProduct = require('../models/VendorProduct');
 const { ROLES } = require('../config/roles');
 
 const withDemo = process.argv.includes('--demo');
+const resetPassword = process.argv.includes('--reset-password');
 
 const DEMO_VENDORS = [
   { name: 'Adani Enterprises', code: 'ADANI', email: 'procurement@adani.example', contactPerson: 'R. Mehta', phone: '9000000001' },
@@ -47,8 +48,20 @@ async function upsertSuperAdmin() {
     admin.role = ROLES.SUPER_ADMIN;
     admin.isActive = true;
     admin.name = config.seed.name;
+
+    // Changing SEED_SUPERADMIN_PASSWORD does nothing on its own: re-running the
+    // seed must never silently overwrite a password that has since been changed
+    // from the profile page. Pass --reset-password when you actually mean it.
+    if (resetPassword) admin.password = config.seed.password;
+
     await admin.save();
-    log(`Super admin already existed, refreshed: ${email}`);
+
+    log(`Super admin already existed: ${email} (active)`);
+    log(
+      resetPassword
+        ? `Password reset to SEED_SUPERADMIN_PASSWORD: ${config.seed.password}`
+        : 'Password left unchanged - re-run with --reset-password to set it from SEED_SUPERADMIN_PASSWORD'
+    );
     return admin;
   }
 
