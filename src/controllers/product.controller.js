@@ -2,6 +2,7 @@
 
 const Product = require('../models/Product');
 const VendorProduct = require('../models/VendorProduct');
+const Vendor = require('../models/Vendor');
 const ApiError = require('../utils/ApiError');
 const asyncHandler = require('../utils/asyncHandler');
 const { ok, created, paginated } = require('../utils/response');
@@ -156,8 +157,114 @@ const deleteProduct = asyncHandler(async (req, res) => {
   return ok(res, null, 'Product deleted and removed from all vendors');
 });
 
+/** Shared upsert used by both assignment entry points. */
+const assignmentOp = (vendorId, productId, actorId) => ({
+  updateOne: {
+    filter: { vendor: vendorId, product: productId },
+    update: {
+      $set: { isActive: true, assignedBy: actorId, assignedAt: new Date() },
+      $setOnInsert: { vendor: vendorId, product: productId, vendorPrice: null, minOrderQty: 1 },
+    },
+    upsert: true,
+  },
+});
+
+/**
+ * PUT /products/:id/vendors   body: { vendorIds: [] }
+ *
+ * Sets the exact list of vendors that can see this product: vendors that are
+ * present get an assignment, vendors that were removed lose theirs. This is the
+ * catalogue-side mirror of assigning products from a vendor's page.
+ */
+const setProductVendors = asyncHandler(async (req, res) => {
+  const product = await Product.findById(req.params.id).lean();
+  if (!product) throw ApiError.notFound('Product not found');
+
+  const vendorIds = [...new Set((req.body.vendorIds || []).map(String))];
+
+  if (vendorIds.length) {
+    const found = await Vendor.countDocuments({ _id: { $in: vendorIds } });
+    if (found !== vendorIds.length) throw ApiError.badRequest('One or more vendors do not exist');
+  }
+
+  const current = await VendorProduct.find({ product: product._id }).select('vendor').lean();
+  const currentIds = current.map((row) => String(row.vendor));
+
+  const toAdd = vendorIds.filter((id) => !currentIds.includes(id));
+  const toRemove = currentIds.filter((id) => !vendorIds.includes(id));
+
+  if (toAdd.length) {
+    await VendorProduct.bulkWrite(
+      toAdd.map((vendorId) => assignmentOp(vendorId, product._id, req.user._id)),
+      { ordered: false }
+    );
+  }
+  if (toRemove.length) {
+    await VendorProduct.deleteMany({ product: product._id, vendor: { $in: toRemove } });
+  }
+
+  const summary =
+    !toAdd.length && !toRemove.length
+      ? 'No changes - those vendors were already set'
+      : [
+          toAdd.length ? `added to ${toAdd.length} vendor(s)` : null,
+          toRemove.length ? `removed from ${toRemove.length} vendor(s)` : null,
+        ]
+          .filter(Boolean)
+          .join(' and ');
+
+  return ok(
+    res,
+    { added: toAdd.length, removed: toRemove.length, vendorCount: vendorIds.length },
+    `${product.name} ${summary}`
+  );
+});
+
+/**
+ * POST /products/assign   body: { productIds: [], vendorIds: [] }
+ *
+ * Assigns many products to many vendors in one call. Deliberately additive:
+ * removing across a mixed selection would be ambiguous, so unassignment stays
+ * a per-product or per-vendor action.
+ */
+const bulkAssignProducts = asyncHandler(async (req, res) => {
+  const productIds = [...new Set((req.body.productIds || []).map(String))];
+  const vendorIds = [...new Set((req.body.vendorIds || []).map(String))];
+
+  if (!productIds.length) throw ApiError.badRequest('Select at least one product');
+  if (!vendorIds.length) throw ApiError.badRequest('Select at least one vendor');
+
+  const [products, vendors] = await Promise.all([
+    Product.countDocuments({ _id: { $in: productIds } }),
+    Vendor.countDocuments({ _id: { $in: vendorIds } }),
+  ]);
+  if (products !== productIds.length) throw ApiError.badRequest('One or more products do not exist');
+  if (vendors !== vendorIds.length) throw ApiError.badRequest('One or more vendors do not exist');
+
+  const operations = [];
+  vendorIds.forEach((vendorId) => {
+    productIds.forEach((productId) => {
+      operations.push(assignmentOp(vendorId, productId, req.user._id));
+    });
+  });
+
+  const result = await VendorProduct.bulkWrite(operations, { ordered: false });
+
+  return ok(
+    res,
+    {
+      pairs: operations.length,
+      newlyAssigned: result.upsertedCount || 0,
+      reactivated: result.modifiedCount || 0,
+    },
+    `${productIds.length} product(s) assigned to ${vendorIds.length} vendor(s)`
+  );
+});
+
 module.exports = {
   listProducts,
+  setProductVendors,
+  bulkAssignProducts,
   listCategories,
   getProduct,
   createProduct,

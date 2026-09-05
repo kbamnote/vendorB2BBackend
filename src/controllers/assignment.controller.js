@@ -151,9 +151,23 @@ const listVendorCategories = asyncHandler(async (req, res) => {
     { $lookup: { from: 'products', localField: 'product', foreignField: '_id', as: 'product' } },
     { $unwind: '$product' },
     { $match: { 'product.isActive': true } },
-    { $group: { _id: '$product.category', count: { $sum: 1 } } },
+    // Products that have an image sort first, so $first picks a real picture
+    // for the category tile rather than whichever row happened to come back.
+    {
+      $addFields: {
+        hasImage: { $cond: [{ $gt: [{ $strLenCP: { $ifNull: ['$product.imageUrl', ''] } }, 0] }, 1, 0] },
+      },
+    },
+    { $sort: { hasImage: -1, 'product.createdAt': -1 } },
+    {
+      $group: {
+        _id: '$product.category',
+        count: { $sum: 1 },
+        image: { $first: '$product.imageUrl' },
+      },
+    },
     { $sort: { count: -1, _id: 1 } },
-    { $project: { _id: 0, category: '$_id', count: 1 } },
+    { $project: { _id: 0, category: '$_id', count: 1, image: 1 } },
   ]);
 
   const total = rows.reduce((sum, row) => sum + row.count, 0);

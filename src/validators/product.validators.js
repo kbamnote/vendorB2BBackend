@@ -43,4 +43,22 @@ const updateProductRules = [
 
 const statusRules = [body('isActive').isBoolean().withMessage('isActive must be true or false')];
 
-module.exports = { createProductRules, updateProductRules, statusRules };
+const setVendorsRules = [
+  body('vendorIds').isArray().withMessage('vendorIds must be an array'),
+  body('vendorIds.*').isMongoId().withMessage('Each vendor id must be valid'),
+];
+
+const bulkAssignRules = [
+  body('productIds').isArray({ min: 1 }).withMessage('Select at least one product'),
+  body('productIds.*').isMongoId().withMessage('Each product id must be valid'),
+  body('vendorIds').isArray({ min: 1 }).withMessage('Select at least one vendor'),
+  body('vendorIds.*').isMongoId().withMessage('Each vendor id must be valid'),
+];
+
+module.exports = {
+  createProductRules,
+  updateProductRules,
+  statusRules,
+  setVendorsRules,
+  bulkAssignRules,
+};

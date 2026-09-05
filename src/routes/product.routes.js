@@ -10,6 +10,8 @@ const {
   createProductRules,
   updateProductRules,
   statusRules,
+  setVendorsRules,
+  bulkAssignRules,
 } = require('../validators/product.validators');
 const { mongoIdParam, paginationQuery } = require('../validators/common.validators');
 
@@ -23,9 +25,18 @@ router.get('/categories', ctrl.listCategories);
 router.get('/', validate(paginationQuery), ctrl.listProducts);
 router.post('/', validate(createProductRules), ctrl.createProduct);
 
+// Assignment from the catalogue side. Declared before /:id so the static path
+// is never swallowed by the id parameter.
+router.post('/assign', validate(bulkAssignRules), ctrl.bulkAssignProducts);
+
 router.get('/:id', validate([mongoIdParam('id')]), ctrl.getProduct);
 router.put('/:id', validate([mongoIdParam('id'), ...updateProductRules]), ctrl.updateProduct);
 router.patch('/:id/status', validate([mongoIdParam('id'), ...statusRules]), ctrl.setProductStatus);
+router.put(
+  '/:id/vendors',
+  validate([mongoIdParam('id'), ...setVendorsRules]),
+  ctrl.setProductVendors
+);
 router.delete('/:id', validate([mongoIdParam('id')]), ctrl.deleteProduct);
 
 module.exports = router;
