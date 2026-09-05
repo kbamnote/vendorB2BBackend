@@ -32,6 +32,7 @@ const argv = process.argv.slice(2);
 const DRY_RUN = argv.includes('--dry-run');
 const ASSIGN_ALL = argv.includes('--assign-all');
 const SKIP_IMAGES = argv.includes('--no-images');
+const SHOW_ALL = argv.includes('--all');
 
 /**
  * The source certificate expired in November 2025, so Node refuses the
@@ -251,15 +252,35 @@ async function run() {
   const mapped = raw.map(mapProduct);
 
   if (DRY_RUN) {
-    log('Dry run - nothing will be written. First five records:');
-    mapped.slice(0, 5).forEach((item) => {
+    const rows = SHOW_ALL ? mapped : mapped.slice(0, 5);
+
+    log(
+      `Dry run - nothing will be written. All ${mapped.length} products would be imported; ` +
+        `showing ${rows.length}${SHOW_ALL ? '' : ` of ${mapped.length} (pass --all to list every one)`}:`
+    );
+
+    rows.forEach((item) => {
       log(
         `  ${item.sku.padEnd(10)} ${item.name.slice(0, 42).padEnd(44)} ` +
-          `${item.currency} ${item.basePrice}  [${item.category}]  ${item._sourceImages.length} img`
+          `${item.currency} ${String(item.basePrice).padStart(8)}  ` +
+          `[${item.category}]  ${item._sourceImages.length} img`
       );
     });
-    const zeroPriced = mapped.filter((item) => !item.basePrice).length;
-    log(`${zeroPriced} product(s) have no price and will import at 0`);
+
+    const byCategory = mapped.reduce(
+      (acc, item) => ({ ...acc, [item.category]: (acc[item.category] || 0) + 1 }),
+      {}
+    );
+
+    log('');
+    log(`Summary for all ${mapped.length} products:`);
+    log(`  ${mapped.filter((item) => !item.basePrice).length} with no price (import at 0)`);
+    log(`  ${mapped.filter((item) => item._sourceImages.length).length} with at least one image`);
+    log(`  ${mapped.filter((item) => item.attributes.length).length} with selectable options`);
+    log(`  ${Object.keys(byCategory).length} categories:`);
+    Object.entries(byCategory)
+      .sort((a, b) => b[1] - a[1])
+      .forEach(([category, count]) => log(`    ${String(count).padStart(4)}  ${category}`));
     return;
   }
 
