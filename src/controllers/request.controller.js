@@ -13,6 +13,7 @@ const { VENDOR_ADMIN_LEVEL } = require('../config/approvals');
 const chain = require('../services/approvalChain');
 const notify = require('../services/notify');
 const Vendor = require('../models/Vendor');
+const Product = require('../models/Product');
 
 const round2 = (value) => Math.round((Number(value) + Number.EPSILON) * 100) / 100;
 
@@ -21,6 +22,42 @@ async function buildRequestNumber() {
   const key = `request-${now.getFullYear()}`;
   const seq = await nextSequence(key);
   return `REQ-${now.getFullYear()}-${String(seq).padStart(4, '0')}`;
+}
+
+
+/**
+ * Fills in line images for requests raised before the image was snapshotted.
+ *
+ * Done at read time rather than by a migration: it costs one extra query only
+ * when older rows are actually returned, and it never rewrites history.
+ */
+async function attachItemImages(requests) {
+  const list = Array.isArray(requests) ? requests : [requests];
+
+  const missing = new Set();
+  list.forEach((request) => {
+    (request?.items || []).forEach((item) => {
+      if (!item.imageUrl && item.product) missing.add(String(item.product));
+    });
+  });
+
+  if (!missing.size) return requests;
+
+  const products = await Product.find({ _id: { $in: [...missing] } })
+    .select('imageUrl')
+    .lean();
+  const byId = new Map(products.map((product) => [String(product._id), product.imageUrl || '']));
+
+  list.forEach((request) => {
+    (request?.items || []).forEach((item) => {
+      if (!item.imageUrl && item.product) {
+        // eslint-disable-next-line no-param-reassign
+        item.imageUrl = byId.get(String(item.product)) || '';
+      }
+    });
+  });
+
+  return requests;
 }
 
 /** Throws unless the caller may see this request. */
@@ -71,6 +108,7 @@ const createRequest = asyncHandler(async (req, res) => {
       name: row.product.name,
       sku: row.product.sku,
       unit: row.product.unit,
+      imageUrl: row.product.imageUrl || '',
       quantity: wanted.get(String(row.product._id)),
       indicativePrice:
         row.vendorPrice !== null && row.vendorPrice !== undefined
@@ -341,6 +379,8 @@ const listRequests = asyncHandler(async (req, res) => {
     PurchaseRequest.countDocuments(filter),
   ]);
 
+  await attachItemImages(items);
+
   return paginated(res, items, { page, limit, total }, 'Requests loaded');
 });
 
@@ -355,6 +395,8 @@ const getRequest = asyncHandler(async (req, res) => {
 
   if (!request) throw ApiError.notFound('Request not found');
   assertCanView(req.user, request);
+
+  await attachItemImages(request);
 
   return ok(res, { request }, 'Request loaded');
 });

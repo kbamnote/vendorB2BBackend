@@ -28,6 +28,9 @@ const itemSchema = new mongoose.Schema(
     name: { type: String, required: true, trim: true },
     sku: { type: String, required: true, trim: true },
     unit: { type: String, trim: true, default: 'pcs' },
+    // Snapshotted like the name and SKU, so an old quotation still shows
+    // the product as it looked when it was requested.
+    imageUrl: { type: String, trim: true, default: '' },
 
     quantity: {
       type: Number,
