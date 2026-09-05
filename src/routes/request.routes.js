@@ -10,6 +10,8 @@ const {
   createRequestRules,
   quoteRules,
   statusRules,
+  approvalNoteRules,
+  editItemsRules,
 } = require('../validators/request.validators');
 const { mongoIdParam, paginationQuery } = require('../validators/common.validators');
 
@@ -36,6 +38,30 @@ router.patch(
   authorize(ROLES.SUPER_ADMIN),
   validate([mongoIdParam('id'), ...quoteRules]),
   ctrl.sendQuotation
+);
+
+/* ----- Internal approval chain, vendor side only ----- */
+const vendorRoles = [ROLES.VENDOR_ADMIN, ROLES.VENDOR_STAFF];
+
+router.patch(
+  '/:id/approve',
+  authorize(...vendorRoles),
+  validate([mongoIdParam('id'), ...approvalNoteRules]),
+  ctrl.approveRequest
+);
+
+router.patch(
+  '/:id/return',
+  authorize(...vendorRoles),
+  validate([mongoIdParam('id'), ...approvalNoteRules]),
+  ctrl.returnRequest
+);
+
+router.patch(
+  '/:id/items',
+  authorize(...vendorRoles),
+  validate([mongoIdParam('id'), ...editItemsRules]),
+  ctrl.editRequestItems
 );
 
 router.patch('/:id/status', validate([mongoIdParam('id'), ...statusRules]), ctrl.updateStatus);

@@ -4,6 +4,11 @@ const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
 const config = require('../config/env');
 const { ROLE_VALUES, ROLES, VENDOR_SCOPED_ROLES } = require('../config/roles');
+const {
+  STAFF_LEVEL_MIN,
+  STAFF_LEVEL_MAX,
+  VENDOR_ADMIN_LEVEL,
+} = require('../config/approvals');
 
 const EMAIL_RX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -44,6 +49,18 @@ const userSchema = new mongoose.Schema(
       index: true,
     },
     designation: { type: String, trim: true, default: '' },
+
+    /**
+     * Position in the vendor's approval chain. Staff are placed on a level by
+     * their vendor admin; a vendor admin is forced to the top level below, so
+     * the value is always meaningful without special casing at every read.
+     */
+    approvalLevel: {
+      type: Number,
+      default: STAFF_LEVEL_MIN,
+      min: STAFF_LEVEL_MIN,
+      max: VENDOR_ADMIN_LEVEL,
+    },
     isActive: { type: Boolean, default: true, index: true },
     lastLoginAt: { type: Date, default: null },
     createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
@@ -70,6 +87,17 @@ userSchema.pre('validate', function enforceVendorScope(next) {
   } else if (VENDOR_SCOPED_ROLES.includes(this.role) && !this.vendor) {
     this.invalidate('vendor', `A ${this.role} must belong to a vendor`);
   }
+
+  // A vendor admin is always the final approver; staff are capped below that.
+  if (this.role === ROLES.VENDOR_ADMIN) {
+    this.approvalLevel = VENDOR_ADMIN_LEVEL;
+  } else if (this.role === ROLES.VENDOR_STAFF) {
+    if (!this.approvalLevel || this.approvalLevel < STAFF_LEVEL_MIN) {
+      this.approvalLevel = STAFF_LEVEL_MIN;
+    }
+    if (this.approvalLevel > STAFF_LEVEL_MAX) this.approvalLevel = STAFF_LEVEL_MAX;
+  }
+
   next();
 });
 

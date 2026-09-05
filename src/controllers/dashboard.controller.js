@@ -6,6 +6,7 @@ const User = require('../models/User');
 const VendorProduct = require('../models/VendorProduct');
 const PurchaseRequest = require('../models/PurchaseRequest');
 const { REQUEST_STATUS } = require('../models/PurchaseRequest');
+const { VENDOR_ADMIN_LEVEL } = require('../config/approvals');
 const asyncHandler = require('../utils/asyncHandler');
 const { ok } = require('../utils/response');
 const { ROLES } = require('../config/roles');
@@ -87,6 +88,7 @@ const summary = asyncHandler(async (req, res) => {
     recentAssignments,
     openRequests,
     awaitingDecision,
+    awaitingMyApproval,
   ] = await Promise.all([
       VendorProduct.countDocuments({ vendor: vendorId }),
       VendorProduct.countDocuments({ vendor: vendorId, isActive: true }),
@@ -102,6 +104,12 @@ const summary = asyncHandler(async (req, res) => {
         status: { $in: [REQUEST_STATUS.SUBMITTED, REQUEST_STATUS.QUOTED] },
       }),
       PurchaseRequest.countDocuments({ vendor: vendorId, status: REQUEST_STATUS.QUOTED }),
+      PurchaseRequest.countDocuments({
+        vendor: vendorId,
+        status: REQUEST_STATUS.PENDING_APPROVAL,
+        'approval.currentLevel':
+          req.user.role === ROLES.VENDOR_ADMIN ? VENDOR_ADMIN_LEVEL : req.user.approvalLevel || 1,
+      }),
     ]);
 
   const categories = await VendorProduct.aggregate([
@@ -129,6 +137,7 @@ const summary = asyncHandler(async (req, res) => {
         adminCount,
         openRequests,
         awaitingDecision,
+        awaitingMyApproval,
       },
       categories,
       recentAssignments: recentAssignments

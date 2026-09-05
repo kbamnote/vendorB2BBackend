@@ -33,4 +33,23 @@ const statusRules = [
   body('note').optional({ values: 'falsy' }).isString().trim().isLength({ max: 1000 }),
 ];
 
-module.exports = { createRequestRules, quoteRules, statusRules };
+const approvalNoteRules = [
+  body('note').optional({ values: 'falsy' }).isString().trim().isLength({ max: 1000 }),
+];
+
+const editItemsRules = [
+  body('items').isArray({ min: 1 }).withMessage('Keep at least one product'),
+  body('items.*.product').isMongoId().withMessage('Each line must reference a valid product'),
+  body('items.*.quantity')
+    .isInt({ min: 1, max: 1000000 })
+    .withMessage('Quantity must be a whole number of at least 1'),
+  ...approvalNoteRules,
+];
+
+module.exports = {
+  createRequestRules,
+  quoteRules,
+  statusRules,
+  approvalNoteRules,
+  editItemsRules,
+};

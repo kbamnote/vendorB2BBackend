@@ -6,7 +6,9 @@ const { protect } = require('../middleware/auth');
 const { authorize, scopeToVendor } = require('../middleware/authorize');
 const { ROLES } = require('../config/roles');
 const assignmentCtrl = require('../controllers/assignment.controller');
+const cartCtrl = require('../controllers/cart.controller');
 const { mongoIdParam, paginationQuery } = require('../validators/common.validators');
+const { cartRules } = require('../validators/cart.validators');
 
 const router = express.Router();
 
@@ -22,5 +24,10 @@ router.get(
   validate([mongoIdParam('productId')]),
   assignmentCtrl.getVendorProduct
 );
+
+/* ----- Saved basket, one per user ----- */
+router.get('/cart', cartCtrl.getCart);
+router.put('/cart', validate(cartRules), cartCtrl.replaceCart);
+router.delete('/cart', cartCtrl.clearCart);
 
 module.exports = router;

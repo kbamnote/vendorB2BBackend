@@ -9,6 +9,10 @@ const asyncHandler = require('../utils/asyncHandler');
 const { ok, created, paginated } = require('../utils/response');
 const { getPagination, buildSearchFilter } = require('../utils/pagination');
 const { ROLES } = require('../config/roles');
+const { VENDOR_ADMIN_LEVEL } = require('../config/approvals');
+const chain = require('../services/approvalChain');
+const notify = require('../services/notify');
+const Vendor = require('../models/Vendor');
 
 const round2 = (value) => Math.round((Number(value) + Number.EPSILON) * 100) / 100;
 
@@ -79,6 +83,13 @@ const createRequest = asyncHandler(async (req, res) => {
     throw ApiError.badRequest('One or more products are no longer active');
   }
 
+  // The chain starts above whoever raised it: their own level counts as
+  // already approved. A vendor admin has nobody above, so their request goes
+  // straight out to the super admin.
+  const raisedByLevel = chain.levelOf(req.user);
+  const goesStraightOut = chain.isFinalApprover(raisedByLevel);
+  const nextLevel = goesStraightOut ? null : await chain.nextLevelAbove(vendorId, raisedByLevel);
+
   const request = await PurchaseRequest.create({
     requestNumber: await buildRequestNumber(),
     vendor: vendorId,
@@ -86,14 +97,207 @@ const createRequest = asyncHandler(async (req, res) => {
     items,
     notes: req.body.notes,
     expectedDeliveryDate: req.body.expectedDeliveryDate || null,
-    status: REQUEST_STATUS.SUBMITTED,
+    status: goesStraightOut ? REQUEST_STATUS.SUBMITTED : REQUEST_STATUS.PENDING_APPROVAL,
+    approval: {
+      currentLevel: nextLevel,
+      raisedByLevel,
+      history: [
+        chain.event(goesStraightOut ? 'sent_to_supplier' : 'submitted', req.user, {
+          fromLevel: raisedByLevel,
+          toLevel: nextLevel,
+          note: req.body.notes || '',
+        }),
+      ],
+    },
   });
+
+  if (goesStraightOut) {
+    const vendor = await Vendor.findById(vendorId).select('name').lean();
+    await notify.requestReceived(request, req.user, vendor?.name);
+  } else {
+    await notify.requestNeedsApproval(request, req.user);
+  }
 
   return created(
     res,
     { request },
-    `Request ${request.requestNumber} sent. The super admin will respond with a quotation.`
+    goesStraightOut
+      ? `Request ${request.requestNumber} sent to Print World for a quotation.`
+      : `Request ${request.requestNumber} sent for approval.`
   );
+});
+
+/**
+ * PATCH /requests/:id/approve
+ *
+ * Moves the request one step up the chain. When the approver is the vendor
+ * admin, this is the step that releases it to the super admin.
+ */
+const approveRequest = asyncHandler(async (req, res) => {
+  const request = await PurchaseRequest.findById(req.params.id);
+  if (!request) throw ApiError.notFound('Request not found');
+  if (request.status !== REQUEST_STATUS.PENDING_APPROVAL) {
+    throw ApiError.badRequest(`This request is ${request.status} and is not awaiting approval`);
+  }
+  if (!chain.canActOn(req.user, request)) {
+    throw ApiError.forbidden('This request is not waiting on you');
+  }
+
+  const myLevel = chain.levelOf(req.user);
+
+  if (chain.isFinalApprover(myLevel)) {
+    request.status = REQUEST_STATUS.SUBMITTED;
+    request.approval.currentLevel = null;
+    request.approval.history.push(
+      chain.event('sent_to_supplier', req.user, {
+        fromLevel: myLevel,
+        toLevel: null,
+        note: req.body.note || '',
+      })
+    );
+    await request.save();
+
+    const vendor = await Vendor.findById(request.vendor).select('name').lean();
+    await notify.requestReceived(request, req.user, vendor?.name);
+
+    return ok(
+      res,
+      { request },
+      `${request.requestNumber} approved and sent to Print World for a quotation`
+    );
+  }
+
+  const nextLevel = await chain.nextLevelAbove(request.vendor, myLevel);
+  request.approval.currentLevel = nextLevel;
+  request.approval.history.push(
+    chain.event('approved', req.user, {
+      fromLevel: myLevel,
+      toLevel: nextLevel,
+      note: req.body.note || '',
+    })
+  );
+  await request.save();
+
+  await notify.requestApproved(request, req.user);
+  await notify.requestNeedsApproval(request, req.user);
+
+  return ok(
+    res,
+    { request },
+    nextLevel >= VENDOR_ADMIN_LEVEL
+      ? `${request.requestNumber} approved and sent to the vendor admin`
+      : `${request.requestNumber} approved and sent to level ${nextLevel}`
+  );
+});
+
+/**
+ * PATCH /requests/:id/return
+ *
+ * Sends the request back one occupied level with a reason. It never drops
+ * below the person who raised it.
+ */
+const returnRequest = asyncHandler(async (req, res) => {
+  const request = await PurchaseRequest.findById(req.params.id);
+  if (!request) throw ApiError.notFound('Request not found');
+  if (request.status !== REQUEST_STATUS.PENDING_APPROVAL) {
+    throw ApiError.badRequest(`This request is ${request.status} and cannot be returned`);
+  }
+  if (!chain.canActOn(req.user, request)) {
+    throw ApiError.forbidden('This request is not waiting on you');
+  }
+
+  const myLevel = chain.levelOf(req.user);
+  const target = await chain.previousLevelBelow(
+    request.vendor,
+    myLevel,
+    request.approval.raisedByLevel
+  );
+
+  if (target === null || target >= myLevel) {
+    throw ApiError.badRequest('There is no earlier step to send this back to');
+  }
+
+  request.approval.currentLevel = target;
+  request.approval.history.push(
+    chain.event('returned', req.user, {
+      fromLevel: myLevel,
+      toLevel: target,
+      note: req.body.note || '',
+    })
+  );
+  await request.save();
+
+  await notify.requestReturned(request, req.user, req.body.note);
+
+  return ok(res, { request }, `${request.requestNumber} sent back to level ${target}`);
+});
+
+/**
+ * PATCH /requests/:id/items
+ *
+ * Lets the current approver trim the basket - remove lines or cut quantities -
+ * before passing it on. Every change is recorded against their name.
+ */
+const editRequestItems = asyncHandler(async (req, res) => {
+  const request = await PurchaseRequest.findById(req.params.id);
+  if (!request) throw ApiError.notFound('Request not found');
+  if (request.status !== REQUEST_STATUS.PENDING_APPROVAL) {
+    throw ApiError.badRequest('Only a request awaiting approval can be edited');
+  }
+  if (!chain.canActOn(req.user, request)) {
+    throw ApiError.forbidden('This request is not waiting on you');
+  }
+
+  const wanted = new Map(
+    (req.body.items || []).map((line) => [String(line.product), Math.floor(Number(line.quantity))])
+  );
+
+  const changes = [];
+  const kept = [];
+
+  request.items.forEach((item) => {
+    const id = String(item.product);
+    if (!wanted.has(id)) {
+      changes.push(`Removed ${item.name}`);
+      return;
+    }
+
+    const quantity = wanted.get(id);
+    if (!Number.isFinite(quantity) || quantity < 1) {
+      changes.push(`Removed ${item.name}`);
+      return;
+    }
+
+    if (quantity !== item.quantity) {
+      changes.push(
+        `${quantity < item.quantity ? 'Reduced' : 'Increased'} ${item.name} from ` +
+          `${item.quantity} to ${quantity} ${item.unit}`
+      );
+      item.quantity = quantity;
+    }
+
+    kept.push(item);
+  });
+
+  if (!kept.length) {
+    throw ApiError.badRequest('A request must keep at least one product - cancel it instead');
+  }
+  if (!changes.length) throw ApiError.badRequest('Nothing changed');
+
+  request.items = kept;
+  request.approval.history.push(
+    chain.event('edited', req.user, {
+      fromLevel: chain.levelOf(req.user),
+      toLevel: request.approval.currentLevel,
+      note: req.body.note || '',
+      changes,
+    })
+  );
+  await request.save();
+
+  await notify.requestEdited(request, req.user, changes);
+
+  return ok(res, { request }, `${changes.length} change(s) saved`);
 });
 
 /**
@@ -106,11 +310,22 @@ const listRequests = asyncHandler(async (req, res) => {
 
   if (req.user.role === ROLES.SUPER_ADMIN) {
     if (req.query.vendorId) filter.vendor = req.query.vendorId;
+    // A request still moving through a vendor's own approval chain is that
+    // vendor's business, so it never appears in the super admin's list.
+    filter.status = { $ne: REQUEST_STATUS.PENDING_APPROVAL };
   } else {
     filter.vendor = req.user.vendor;
+
+    // "Needs my approval" inbox.
+    if (req.query.inbox === 'me') {
+      filter.status = REQUEST_STATUS.PENDING_APPROVAL;
+      filter['approval.currentLevel'] = chain.levelOf(req.user);
+    }
   }
 
-  if (req.query.status && req.query.status !== 'all') filter.status = req.query.status;
+  if (req.query.status && req.query.status !== 'all' && req.query.inbox !== 'me') {
+    filter.status = req.query.status;
+  }
 
   const search = buildSearchFilter(req.query.search, ['requestNumber', 'items.name', 'items.sku']);
   if (search) Object.assign(filter, search);
@@ -209,6 +424,8 @@ const sendQuotation = asyncHandler(async (req, res) => {
 
   await request.save();
 
+  await notify.quotationSent(request, req.user);
+
   return ok(
     res,
     { request },
@@ -236,6 +453,7 @@ const updateStatus = asyncHandler(async (req, res) => {
         [REQUEST_STATUS.QUOTED]: [REQUEST_STATUS.REJECTED, REQUEST_STATUS.CANCELLED],
       }
     : {
+        [REQUEST_STATUS.PENDING_APPROVAL]: [REQUEST_STATUS.CANCELLED],
         [REQUEST_STATUS.SUBMITTED]: [REQUEST_STATUS.CANCELLED],
         [REQUEST_STATUS.QUOTED]: [
           REQUEST_STATUS.ACCEPTED,
@@ -259,6 +477,12 @@ const updateStatus = asyncHandler(async (req, res) => {
   request.responseNote = req.body.note || '';
   await request.save();
 
+  if (target === REQUEST_STATUS.CANCELLED) {
+    await notify.requestCancelled(request, req.user);
+  } else if (!isSuperAdmin) {
+    await notify.quotationDecision(request, req.user, target === REQUEST_STATUS.ACCEPTED);
+  }
+
   return ok(res, { request }, `Request marked as ${target}`);
 });
 
@@ -273,6 +497,15 @@ const requestStats = asyncHandler(async (req, res) => {
 
   const byStatus = rows.reduce((acc, row) => ({ ...acc, [row._id]: row.count }), {});
 
+  let awaitingMyApproval = 0;
+  if (req.user.role !== ROLES.SUPER_ADMIN) {
+    awaitingMyApproval = await PurchaseRequest.countDocuments({
+      vendor: req.user.vendor,
+      status: REQUEST_STATUS.PENDING_APPROVAL,
+      'approval.currentLevel': chain.levelOf(req.user),
+    });
+  }
+
   return ok(
     res,
     {
@@ -280,6 +513,8 @@ const requestStats = asyncHandler(async (req, res) => {
       total: rows.reduce((sum, row) => sum + row.count, 0),
       awaitingQuotation: byStatus[REQUEST_STATUS.SUBMITTED] || 0,
       awaitingDecision: byStatus[REQUEST_STATUS.QUOTED] || 0,
+      pendingApproval: byStatus[REQUEST_STATUS.PENDING_APPROVAL] || 0,
+      awaitingMyApproval,
     },
     'Request stats'
   );
@@ -287,6 +522,9 @@ const requestStats = asyncHandler(async (req, res) => {
 
 module.exports = {
   createRequest,
+  approveRequest,
+  returnRequest,
+  editRequestItems,
   listRequests,
   getRequest,
   sendQuotation,

@@ -8,6 +8,7 @@ const asyncHandler = require('../utils/asyncHandler');
 const { ok, created, paginated } = require('../utils/response');
 const { getPagination, buildSearchFilter } = require('../utils/pagination');
 const { safeDestroyImage } = require('../utils/images');
+const notify = require('../services/notify');
 
 // GET /products  (super admin - the full catalogue)
 const listProducts = asyncHandler(async (req, res) => {
@@ -203,6 +204,11 @@ const setProductVendors = asyncHandler(async (req, res) => {
     await VendorProduct.deleteMany({ product: product._id, vendor: { $in: toRemove } });
   }
 
+  await Promise.all([
+    ...toAdd.map((vendorId) => notify.productsAssigned(vendorId, 1, req.user)),
+    ...toRemove.map((vendorId) => notify.productsUnassigned(vendorId, 1, req.user)),
+  ]);
+
   const summary =
     !toAdd.length && !toRemove.length
       ? 'No changes - those vendors were already set'
@@ -249,6 +255,10 @@ const bulkAssignProducts = asyncHandler(async (req, res) => {
   });
 
   const result = await VendorProduct.bulkWrite(operations, { ordered: false });
+
+  await Promise.all(
+    vendorIds.map((vendorId) => notify.productsAssigned(vendorId, productIds.length, req.user))
+  );
 
   return ok(
     res,

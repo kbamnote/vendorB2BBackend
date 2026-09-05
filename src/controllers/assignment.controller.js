@@ -7,6 +7,7 @@ const ApiError = require('../utils/ApiError');
 const asyncHandler = require('../utils/asyncHandler');
 const { ok, paginated } = require('../utils/response');
 const { getPagination, buildSearchFilter } = require('../utils/pagination');
+const notify = require('../services/notify');
 
 /** Resolves which vendor this request is allowed to touch. */
 async function resolveVendor(req) {
@@ -236,6 +237,8 @@ const assignProducts = asyncHandler(async (req, res) => {
 
   const result = await VendorProduct.bulkWrite(operations, { ordered: false });
 
+  await notify.productsAssigned(vendor._id, productIds.length, req.user);
+
   return ok(
     res,
     {
@@ -260,6 +263,10 @@ const unassignProducts = asyncHandler(async (req, res) => {
     vendor: vendor._id,
     product: { $in: productIds },
   });
+
+  if (result.deletedCount > 0) {
+    await notify.productsUnassigned(vendor._id, result.deletedCount, req.user);
+  }
 
   return ok(
     res,

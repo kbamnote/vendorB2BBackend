@@ -115,6 +115,7 @@ const createUser = asyncHandler(async (req, res) => {
     password: req.body.password,
     phone: req.body.phone,
     designation: req.body.designation,
+    approvalLevel: req.body.approvalLevel,
     role,
     vendor: vendor._id,
     isActive: req.body.isActive !== undefined ? req.body.isActive : true,
@@ -136,7 +137,7 @@ const updateUser = asyncHandler(async (req, res) => {
   if (!target) throw ApiError.notFound('User not found');
   assertCanManage(req.user, target);
 
-  const fields = ['name', 'phone', 'designation'];
+  const fields = ['name', 'phone', 'designation', 'approvalLevel'];
   fields.forEach((f) => {
     if (req.body[f] !== undefined) target[f] = req.body[f];
   });
